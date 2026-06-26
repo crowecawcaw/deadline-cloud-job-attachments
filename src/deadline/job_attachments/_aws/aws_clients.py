@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from functools import lru_cache
 from typing import Optional
 
@@ -43,6 +44,55 @@ def get_boto3_session(
     botocore_session: botocore.session.Session = get_botocore_session(),
 ) -> boto3.session.Session:
     return boto3.session.Session(botocore_session=botocore_session)
+
+
+def apply_proxy_settings(
+    session: boto3.session.Session,
+    *,
+    https_proxy: Optional[str] = None,
+    ca_bundle: Optional[str] = None,
+) -> boto3.session.Session:
+    """
+    Apply an HTTPS proxy and/or a custom CA certificate bundle to ``session`` so that
+    *every* client built from it -- including the S3 and Deadline clients created by
+    ``get_s3_client`` / ``get_deadline_client`` -- routes through the proxy and verifies
+    TLS against the bundle.
+
+    Both settings are applied at the session level rather than threaded through each
+    client factory because botocore merges a session's default client config into every
+    per-client ``botocore.config.Config`` (so ``proxies`` is inherited) and reads the
+    session's ``ca_bundle`` config variable for the client's ``verify`` value. This keeps
+    proxy/CA coverage uniform across all Deadline-created clients without changing every
+    download/upload signature.
+
+    This mirrors the ``settings.https_proxy`` / ``settings.ca_bundle`` config options in
+    the ``deadline`` client library, which resolves those values and passes them here.
+
+    Args:
+        session: The boto3 session to configure, modified in place.
+        https_proxy: The proxy URL to apply for both ``http`` and ``https`` endpoints
+            (botocore selects the proxy by the endpoint's scheme). When ``None`` or
+            empty, the proxy is left unchanged.
+        ca_bundle: Path to a CA certificate bundle used to verify TLS connections. ``~``
+            is expanded (botocore does not expand it). When ``None`` or empty, the CA
+            bundle is left unchanged.
+
+    Returns:
+        The same ``session``, for convenient chaining.
+    """
+    botocore_session = session._session
+    if https_proxy and https_proxy.strip():
+        proxy = https_proxy.strip()
+        existing = botocore_session.get_default_client_config() or Config()
+        # Set both schemes so the proxy is honored regardless of the endpoint's scheme.
+        botocore_session.set_default_client_config(
+            existing.merge(Config(proxies={"http": proxy, "https": proxy}))
+        )
+    if ca_bundle and ca_bundle.strip():
+        # botocore feeds the session's ``ca_bundle`` config variable into each client's
+        # ``verify``. It does not expand ``~``, so expand it here.
+        botocore_session.set_config_variable("ca_bundle", os.path.expanduser(ca_bundle.strip()))
+    return session
 
 
 @lru_cache(maxsize=MAX_SIZE_CACHE)

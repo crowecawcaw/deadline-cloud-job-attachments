@@ -15,6 +15,7 @@ from botocore.exceptions import ClientError
 from moto import mock_aws
 
 from deadline.job_attachments._aws.aws_clients import (
+    apply_proxy_settings,
     get_account_id,
     get_boto3_session,
     get_botocore_session,
@@ -149,6 +150,98 @@ services = testprofile-services
     ):
         client = _make_client(service_name)
         assert client.meta.endpoint_url == custom_endpoint
+
+
+class TestApplyProxySettings:
+    """Tests that apply_proxy_settings wires proxy/CA bundle through to built clients."""
+
+    def test_proxy_applied_to_s3_and_deadline_clients(self, boto_config):
+        """A configured https_proxy is inherited by clients built from the session."""
+        session = boto3.Session(region_name="us-west-2")
+        apply_proxy_settings(session, https_proxy="http://proxy.example.com:8080")
+
+        s3_client = get_s3_client(session=session)
+        deadline_client = get_deadline_client(session=session)
+
+        expected = {
+            "http": "http://proxy.example.com:8080",
+            "https": "http://proxy.example.com:8080",
+        }
+        assert s3_client.meta.config.proxies == expected
+        assert deadline_client.meta.config.proxies == expected
+
+    def test_ca_bundle_applied_to_s3_client_verify(self, boto_config):
+        """A configured ca_bundle is used as the client's TLS verify path."""
+        session = boto3.Session(region_name="us-west-2")
+        apply_proxy_settings(session, ca_bundle="/etc/ssl/my-ca.pem")
+
+        s3_client = get_s3_client(session=session)
+
+        assert s3_client._endpoint.http_session._verify == "/etc/ssl/my-ca.pem"
+
+    def test_ca_bundle_expands_user(self, boto_config):
+        """A ``~``-relative ca_bundle is expanded before being applied (botocore won't)."""
+        session = boto3.Session(region_name="us-west-2")
+        apply_proxy_settings(session, ca_bundle="~/certs/ca.pem")
+
+        s3_client = get_s3_client(session=session)
+
+        verify = s3_client._endpoint.http_session._verify
+        assert verify == os.path.expanduser("~/certs/ca.pem")
+        assert "~" not in verify
+
+    def test_proxy_and_ca_bundle_together(self, boto_config):
+        """Both settings apply on the same client: proxy via config, CA via verify."""
+        session = boto3.Session(region_name="us-west-2")
+        apply_proxy_settings(
+            session,
+            https_proxy="http://proxy.example.com:8080",
+            ca_bundle="/etc/ssl/my-ca.pem",
+        )
+
+        s3_client = get_s3_client(session=session)
+
+        assert s3_client.meta.config.proxies == {
+            "http": "http://proxy.example.com:8080",
+            "https": "http://proxy.example.com:8080",
+        }
+        assert s3_client._endpoint.http_session._verify == "/etc/ssl/my-ca.pem"
+
+    def test_proxy_does_not_clobber_existing_default_config(self, boto_config):
+        """Applying a proxy merges into, rather than replaces, an existing default config."""
+        session = boto3.Session(region_name="us-west-2")
+        from botocore.config import Config
+
+        session._session.set_default_client_config(Config(read_timeout=123))
+        apply_proxy_settings(session, https_proxy="http://proxy.example.com:8080")
+
+        merged = session._session.get_default_client_config()
+        assert merged.read_timeout == 123
+        assert merged.proxies == {
+            "http": "http://proxy.example.com:8080",
+            "https": "http://proxy.example.com:8080",
+        }
+
+    def test_no_settings_is_noop(self, boto_config):
+        """With neither setting provided, the session is left untouched."""
+        session = boto3.Session(region_name="us-west-2")
+        apply_proxy_settings(session)
+
+        s3_client = get_s3_client(session=session)
+        assert s3_client.meta.config.proxies is None
+
+    @pytest.mark.parametrize("blank", ["", "   ", None])
+    def test_blank_values_are_ignored(self, boto_config, blank):
+        """Empty/whitespace/None values do not configure the session."""
+        session = boto3.Session(region_name="us-west-2")
+        apply_proxy_settings(session, https_proxy=blank, ca_bundle=blank)
+
+        assert session._session.get_default_client_config() is None
+
+    def test_returns_same_session(self, boto_config):
+        """The helper returns the same session object for chaining."""
+        session = boto3.Session(region_name="us-west-2")
+        assert apply_proxy_settings(session, https_proxy="http://p:8080") is session
 
 
 class TestGetAccountId:
