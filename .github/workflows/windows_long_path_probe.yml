@@ -32,7 +32,8 @@ on:
       - 'src/deadline/job_attachments/os_file_permission.py'
       - 'src/deadline/job_attachments/_incremental_downloads/**'
       - 'scripted_tests/windows_long_path_probe.py'
-      - 'scripts/make_non_longpathaware_python.ps1'
+      - 'scripted_tests/longpath_api_scope.py'
+      - 'scripts/make_non_longpathaware_python.py'
       - '.github/workflows/windows_long_path_probe.yml'
   workflow_dispatch:
 
@@ -108,9 +109,23 @@ jobs:
         if: matrix.host == 'non-aware'
         shell: pwsh
         run: |
-          $exe = & .\scripts\make_non_longpathaware_python.ps1 | Select-Object -Last 1
+          $exe = python scripts/make_non_longpathaware_python.py | Select-Object -Last 1
+          if ($LASTEXITCODE -ne 0) { throw "Failed to build the non-longPathAware interpreter" }
           Write-Host "Patched interpreter: $exe"
           "python-exe=$exe" >> $env:GITHUB_OUTPUT
+
+      # Determines whether RtlAreLongPathsEnabled() is registry-scoped or process-scoped.
+      # The answer decides whether the condition this PR removed was actually wrong.
+      - name: Determine the scope of RtlAreLongPathsEnabled
+        shell: pwsh
+        run: |
+          Write-Host "--- stock python.exe ---"
+          python scripted_tests/longpath_api_scope.py
+          if ('${{ matrix.host }}' -eq 'non-aware') {
+            Write-Host ""
+            Write-Host "--- non-longPathAware copy ---"
+            & '${{ steps.nonaware.outputs.python-exe }}' scripted_tests/longpath_api_scope.py
+          }
 
       - name: Run the probe (long-path-aware host)
         if: matrix.host == 'long-path-aware'
