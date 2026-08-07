@@ -101,21 +101,48 @@ def is_host_long_path_aware() -> bool:
         shutil.rmtree(WINDOWS_UNC_PATH_STRING_PREFIX + tmp, ignore_errors=True)
 
 
-def report_environment() -> Tuple[bool, bool]:
-    registry_enabled = _is_windows_long_path_registry_enabled()
+def read_machine_registry_setting() -> object:
+    r"""
+    The machine-wide LongPathsEnabled value, read straight from the registry.
+
+    Read here rather than via `_is_windows_long_path_registry_enabled()`, because that
+    helper calls RtlAreLongPathsEnabled, which measurements on a GitHub Windows runner
+    show to be PROCESS-scoped, not registry-scoped: with the registry value at 1, it
+    returns True under stock python.exe and False under an otherwise identical copy whose
+    manifest declares longPathAware=false. See scripted_tests/longpath_api_scope.py.
+
+    The two therefore have to be reported separately, or a run on a machine with the key
+    set looks like a run with it unset.
+    """
+    import winreg
+
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\FileSystem"
+        ) as key:
+            value, _ = winreg.QueryValueEx(key, "LongPathsEnabled")
+            return value
+    except FileNotFoundError:
+        return "not set"
+
+
+def report_environment() -> Tuple[object, bool]:
+    registry_value = read_machine_registry_setting()
+    api_says = _is_windows_long_path_registry_enabled()
     host_aware = is_host_long_path_aware()
 
     print("--- environment ---")
     print(f"  sys.executable            : {sys.executable}")
     print(f"  sys.version               : {sys.version.splitlines()[0]}")
-    print(f"  LongPathsEnabled registry : {registry_enabled}")
+    print(f"  LongPathsEnabled (registry): {registry_value!r}  (machine-wide, via winreg)")
+    print(f"  RtlAreLongPathsEnabled()   : {api_says}  (process-scoped, despite the name)")
     # There is no public API to query a process's own longPathAware manifest flag, so
     # this is measured behaviourally rather than read.
-    print(f"  host_long_path_aware      : {host_aware}  (measured behaviourally)")
-    print(f"  WINDOWS_MAX_PATH_LENGTH   : {WINDOWS_MAX_PATH_LENGTH}")
-    print(f"  TEMP_DOWNLOAD_ADDED_CHARS : {TEMP_DOWNLOAD_ADDED_CHARS_LENGTH}")
+    print(f"  host_long_path_aware       : {host_aware}  (measured behaviourally)")
+    print(f"  WINDOWS_MAX_PATH_LENGTH    : {WINDOWS_MAX_PATH_LENGTH}")
+    print(f"  TEMP_DOWNLOAD_ADDED_CHARS  : {TEMP_DOWNLOAD_ADDED_CHARS_LENGTH}")
     print()
-    return registry_enabled, host_aware
+    return registry_value, host_aware
 
 
 # ---------------------------------------------------------------------------
@@ -169,9 +196,9 @@ def probe_registry_alone_is_insufficient(work_dir: str, host_aware: bool) -> Non
         return
 
     check(
-        _is_windows_long_path_registry_enabled(),
-        "This probe is only meaningful with LongPathsEnabled ON. Set the registry key "
-        "HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem\\LongPathsEnabled to 1.",
+        read_machine_registry_setting() == 1,
+        "This probe is only meaningful with the machine-wide LongPathsEnabled setting ON. "
+        "Set HKLM\\SYSTEM\\CurrentControlSet\\Control\\FileSystem\\LongPathsEnabled to 1.",
     )
 
     long_dir = build_long_dir(work_dir, "premise")
@@ -437,11 +464,15 @@ def main() -> int:
 
     os.makedirs(args.work_dir, exist_ok=True)
 
-    registry_enabled, host_aware = report_environment()
+    registry_value, host_aware = report_environment()
 
-    if args.require_registry_enabled and not registry_enabled:
+    # Checked against the registry rather than RtlAreLongPathsEnabled, which is
+    # process-scoped and so returns False on the non-longPathAware leg even with the
+    # machine-wide setting on.
+    if args.require_registry_enabled and registry_value != 1:
         print(
-            "FAIL: --require-registry-enabled was passed but LongPathsEnabled is OFF.",
+            f"FAIL: --require-registry-enabled was passed but the machine-wide "
+            f"LongPathsEnabled setting is {registry_value!r}, not 1.",
             file=sys.stderr,
         )
         return 2
