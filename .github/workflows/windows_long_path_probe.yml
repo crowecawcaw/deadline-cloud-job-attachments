@@ -32,7 +32,7 @@ on:
       - 'src/deadline/job_attachments/os_file_permission.py'
       - 'src/deadline/job_attachments/_incremental_downloads/**'
       - 'scripted_tests/windows_long_path_probe.py'
-      - 'scripts/make_non_longpathaware_python.ps1'
+      - 'scripts/make_non_longpathaware_python.py'
       - '.github/workflows/windows_long_path_probe.yml'
   workflow_dispatch:
 
@@ -108,7 +108,8 @@ jobs:
         if: matrix.host == 'non-aware'
         shell: pwsh
         run: |
-          $exe = & .\scripts\make_non_longpathaware_python.ps1 | Select-Object -Last 1
+          $exe = python scripts/make_non_longpathaware_python.py | Select-Object -Last 1
+          if ($LASTEXITCODE -ne 0) { throw "Failed to build the non-longPathAware interpreter" }
           Write-Host "Patched interpreter: $exe"
           "python-exe=$exe" >> $env:GITHUB_OUTPUT
 
