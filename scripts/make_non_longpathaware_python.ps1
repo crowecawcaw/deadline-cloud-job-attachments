@@ -58,6 +58,18 @@ Write-Host "Source interpreter: $sourceExe"
 $targetExe = Join-Path (Split-Path $sourceExe -Parent) $OutputName
 Copy-Item -Path $sourceExe -Destination $targetExe -Force
 
+# python.exe from python.org is Authenticode signed, and mt.exe refuses to write a
+# resource into a signed image (exit 31). Editing the manifest invalidates the signature
+# regardless, so remove it first. signtool ships alongside mt.exe in the SDK.
+$signtool = Join-Path (Split-Path $mt -Parent) "signtool.exe"
+if (Test-Path $signtool) {
+    # /q so an already-unsigned binary is not treated as an error.
+    & $signtool remove /q /s $targetExe 2>&1 | Out-Null
+    Write-Host "Removed the Authenticode signature from the copy (if it had one)."
+} else {
+    Write-Host "signtool.exe not found next to mt.exe; continuing unsigned-removal-free."
+}
+
 $work = Join-Path $env:RUNNER_TEMP "longpath-manifest"
 if (-not $work) { $work = Join-Path $env:TEMP "longpath-manifest" }
 New-Item -ItemType Directory -Path $work -Force | Out-Null
