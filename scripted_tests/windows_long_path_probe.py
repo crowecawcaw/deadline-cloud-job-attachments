@@ -13,7 +13,7 @@ It is designed to be run twice on the same host, under two different interpreter
   * a long-path-aware host (stock `python.exe`, which has declared `longPathAware`
     since CPython 3.6), and
   * a host that does *not* declare `longPathAware` (see
-    `scripts/make_non_longpathaware_python.ps1`), standing in for the DCC executables
+    `scripts/make_non_longpathaware_python.py`), standing in for the DCC executables
     and pywin32's `pythonservice.exe` that job attachments code actually runs inside.
 
 On a host with the `LongPathsEnabled` registry setting ON, the second case is the one
