@@ -6,6 +6,7 @@ import sys
 import pytest
 
 from deadline.job_attachments._utils import (
+    _get_unique_dest_dir_name,
     _normalize_windows_path,
     _is_relative_to,
     _retry,
@@ -119,3 +120,34 @@ class TestUtils:
 
         # Then
         assert call_count == 2
+
+
+class TestGetUniqueDestDirName:
+    """The name prefixes every asset path a job's applications open, so its length
+    is charged against MAX_PATH on Windows.
+    """
+
+    ROOT = "/home/username/documents/my_project"
+
+    def test_name_length_is_bounded(self):
+        # "assetroot-" plus 12 hex characters. The digest was 20.
+        assert len(_get_unique_dest_dir_name(self.ROOT)) == 22
+
+    def test_prefix_is_preserved(self):
+        # Globbed by two job scripts that should be reading the destinations out of
+        # {{Session.PathMappingRulesFile}} instead. Guarding it keeps this change
+        # independent of fixing them, not because the prefix is a contract.
+        assert _get_unique_dest_dir_name(self.ROOT).startswith("assetroot-")
+
+    def test_name_is_derived_from_the_root(self):
+        # No retry exists to resolve a collision, so the name must be a pure
+        # function of the root and must differ between roots.
+        assert _get_unique_dest_dir_name(self.ROOT) == _get_unique_dest_dir_name(self.ROOT)
+        assert _get_unique_dest_dir_name(self.ROOT) != _get_unique_dest_dir_name(self.ROOT + "2")
+
+    def test_distinct_roots_get_distinct_names(self):
+        roots = [f"/home/username/documents/project_{n}" for n in range(1000)]
+
+        names = {_get_unique_dest_dir_name(root) for root in roots}
+
+        assert len(names) == len(roots)

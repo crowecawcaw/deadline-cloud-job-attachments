@@ -58,11 +58,31 @@ def _float_to_iso_datetime_string(time: float):
 
 
 def _get_unique_dest_dir_name(source_root: str) -> str:
-    # Note: this is a quick naive way to attempt to prevent colliding
-    # relative paths across manifests without adding too much
-    # length to the filepaths. length = 2n where n is the number
-    # passed to hexdigest.
-    return f"assetroot-{shake_256(source_root.encode()).hexdigest(10)}"
+    # Disambiguates the relative paths of the manifests in one session from each
+    # other. Digest length is a tradeoff against MAX_PATH:
+    #
+    # - Every character prefixes every asset path a job's applications open, and
+    #   those applications are not long-path aware, so they are held to MAX_PATH
+    #   (260) no matter how the host or the Worker Agent is configured.
+    # - The name is derived, not allocated, so unlike a mkdtemp() name there is no
+    #   retry to fall back on: two roots that collide would share one directory and
+    #   their files would merge.
+    # - 48 bits is sized for the roots of a single session -- a handful, one per
+    #   manifest plus outputs -- not for a global namespace. It is not cut finer
+    #   than that because the digest is of a path, so a colliding pair of roots
+    #   collides on every job forever rather than once, and the symptom is two file
+    #   trees merged under one directory rather than an error.
+    #
+    # The "assetroot-" prefix stays. It began as accidental coupling -- job scripts
+    # globbing it instead of reading the destinations out of
+    # {{Session.PathMappingRulesFile}}, which is the interface that lists them --
+    # but it is a compatibility surface now, because those scripts ship inside job
+    # bundles and the published ones have been copied downstream. Fixing a script
+    # only helps jobs submitted afterwards, so removing the prefix would silently
+    # break already-submitted jobs on re-run: the glob matches nothing, and the job
+    # succeeds having quietly skipped whatever the glob was for. Prefix length is
+    # deliberately not part of the budget cut here.
+    return f"assetroot-{shake_256(source_root.encode()).hexdigest(6)}"
 
 
 def _get_bucket_and_object_key(s3_path: str) -> Tuple[str, str]:
